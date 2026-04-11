@@ -1,5 +1,5 @@
 # Reusable CI workflow for Bun/TypeScript projects.
-# Implements the 6-dimension quality system: L1/G1/G2 (always), L2/L3 (opt-in).
+# Implements the 6-dimension quality system: L1/G1/G2 (always), L2 (default on).
 #
 # Usage from a caller repo:
 #   jobs:
@@ -56,25 +56,15 @@ on:
         type: string
         default: ""
 
-      # L2: API E2E (opt-in)
+      # L2: API E2E (default on, requires WORKER_URL + WORKER_SECRET secrets)
       enable-l2:
         description: "Enable L2 API E2E tests ('true'/'false')"
         type: string
-        default: "false"
+        default: "true"
       l2-command:
         description: "L2 test command"
         type: string
-        default: "bun run test:api"
-
-      # L3: Playwright E2E (opt-in)
-      enable-l3:
-        description: "Enable L3 Playwright E2E tests ('true'/'false')"
-        type: string
-        default: "false"
-      l3-command:
-        description: "L3 test command"
-        type: string
-        default: "bun x playwright test"
+        default: "bun run test:e2e:api"
 
       # Coverage artifact
       upload-coverage:
@@ -170,14 +160,15 @@ jobs:
           osv-scanner $OSV_ARGS
 
   # ─────────────────────────────────────────────────────
-  # L2: API End-to-End Tests (opt-in)
+  # L2: API End-to-End Tests (default on)
+  # Requires WORKER_URL and WORKER_SECRET secrets to be set.
   # ─────────────────────────────────────────────────────
   api-e2e:
     name: "L2 API E2E"
     if: inputs.enable-l2 == 'true'
     needs: [quality-gate]
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -198,76 +189,13 @@ jobs:
         run: ${{ inputs.l2-command }}
         env:
           CI: "true"
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          D1_TEST_DATABASE_ID: ${{ secrets.D1_TEST_DATABASE_ID }}
+          # Worker connection (required)
+          WORKER_URL: ${{ secrets.WORKER_URL }}
+          WORKER_SECRET: ${{ secrets.WORKER_SECRET }}
+          E2E_SKIP_AUTH: "true"
+          # R2 direct upload (required for media tests)
+          CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
-          R2_TEST_BUCKET_NAME: ${{ secrets.R2_TEST_BUCKET_NAME }}
-          R2_TEST_PUBLIC_DOMAIN: ${{ secrets.R2_TEST_PUBLIC_DOMAIN }}
-          R2_USER_HASH_SALT: ${{ secrets.R2_USER_HASH_SALT }}
-          KV_TEST_NAMESPACE_ID: ${{ secrets.KV_TEST_NAMESPACE_ID }}
-          AUTH_SECRET: ${{ secrets.AUTH_SECRET }}
-
-  # ─────────────────────────────────────────────────────
-  # L3: Playwright Browser E2E (opt-in)
-  # ─────────────────────────────────────────────────────
-  playwright:
-    name: "L3 Playwright E2E"
-    if: inputs.enable-l3 == 'true'
-    needs: [quality-gate]
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: ${{ inputs.bun-version }}
-
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
-
-      - name: Pre-command
-        if: inputs.pre-command != ''
-        run: ${{ inputs.pre-command }}
-
-      - name: Install Playwright browsers
-        run: bunx playwright install chromium --with-deps
-
-      - name: "L3: Playwright E2E tests"
-        run: ${{ inputs.l3-command }}
-        env:
-          CI: "true"
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          D1_TEST_DATABASE_ID: ${{ secrets.D1_TEST_DATABASE_ID }}
-          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
-          R2_TEST_BUCKET_NAME: ${{ secrets.R2_TEST_BUCKET_NAME }}
-          R2_TEST_PUBLIC_DOMAIN: ${{ secrets.R2_TEST_PUBLIC_DOMAIN }}
-          R2_USER_HASH_SALT: ${{ secrets.R2_USER_HASH_SALT }}
-          KV_TEST_NAMESPACE_ID: ${{ secrets.KV_TEST_NAMESPACE_ID }}
-          AUTH_SECRET: ${{ secrets.AUTH_SECRET }}
-
-      - name: Upload Playwright report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: playwright-report
-          path: playwright-report/
-          retention-days: 7
-          if-no-files-found: ignore
-
-      - name: Upload Playwright traces
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: playwright-traces
-          path: test-results/
-          retention-days: 7
-          if-no-files-found: ignore
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+          R2_PUBLIC_URL: ${{ secrets.R2_PUBLIC_URL }}
