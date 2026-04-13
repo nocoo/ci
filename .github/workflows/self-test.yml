@@ -31,11 +31,13 @@ jobs:
           import yaml, sys
           with open('.github/workflows/bun-quality.yml') as f:
               wf = yaml.safe_load(f)
-          assert 'on' in wf, 'Missing on: trigger'
-          assert 'workflow_call' in wf['on'], 'Missing workflow_call trigger'
+          # PyYAML parses YAML 'on:' key as Python boolean True
+          assert True in wf or 'on' in wf, 'Missing on: trigger'
+          on_key = wf.get(True) or wf.get('on')
+          assert 'workflow_call' in on_key, 'Missing workflow_call trigger'
           assert 'jobs' in wf, 'Missing jobs'
           print('✅ Workflow structure valid')
-          print(f'  Triggers: {list(wf[\"on\"].keys())}')
+          print(f'  Triggers: {list(on_key.keys())}')
           print(f'  Jobs: {list(wf[\"jobs\"].keys())}')
-          print(f'  Inputs: {len(wf[\"on\"][\"workflow_call\"].get(\"inputs\", {}))}')
+          print(f'  Inputs: {len(on_key[\"workflow_call\"].get(\"inputs\", {}))}')
           "
