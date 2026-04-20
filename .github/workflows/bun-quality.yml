@@ -1,13 +1,23 @@
 # Reusable CI workflow for Bun/TypeScript projects.
-# Implements the 6-dimension quality system: L1/G1/G2 (always), L2 (default on).
+# Implements the 6-dimension quality system: L1/G1/G2 (always), L2/L3/Worker (optional).
 #
-# Usage from a caller repo:
+# Design: This workflow provides the core quality-gate (L1+G1+G2). L2/L3/Worker
+# jobs are also provided but run WITHOUT dependencies on quality-gate for parallel
+# execution. The caller can choose to:
+#   1. Use the built-in L2/L3/Worker jobs (simpler, but secrets must match naming)
+#   2. Define custom jobs in their ci.yml for full control over secret mapping
+#
+# Usage:
 #   jobs:
-#     ci:
+#     quality:
 #       uses: nocoo/base-ci/.github/workflows/bun-quality.yml@v2026
 #       with:
 #         bun-version: "1.3.11"
+#         enable-l2: "true"   # Opt-in to API E2E
+#         enable-l3: "true"   # Opt-in to Playwright
 #       secrets: inherit
+#
+# L2/L3/Worker jobs run in PARALLEL with quality-gate for faster CI (~50% time savings).
 
 name: Bun Quality Gate
 
@@ -56,15 +66,43 @@ on:
         type: string
         default: ""
 
-      # L2: API E2E (default on, requires WORKER_URL + WORKER_SECRET secrets)
+      # L2: API E2E (default off — requires caller to configure secrets)
       enable-l2:
         description: "Enable L2 API E2E tests ('true'/'false')"
         type: string
-        default: "true"
+        default: "false"
       l2-command:
         description: "L2 test command"
         type: string
-        default: "bun run test:e2e:api"
+        default: "bun run test:api"
+
+      # L3: Browser E2E (Playwright)
+      enable-l3:
+        description: "Enable L3 Playwright E2E tests ('true'/'false')"
+        type: string
+        default: "false"
+      l3-command:
+        description: "L3 Playwright test command"
+        type: string
+        default: "bun run test:e2e:pw"
+      l3-browser:
+        description: "Playwright browser to install (chromium, firefox, webkit)"
+        type: string
+        default: "chromium"
+
+      # Worker: Cloudflare Worker tests
+      enable-worker:
+        description: "Enable Worker tests ('true'/'false')"
+        type: string
+        default: "false"
+      worker-command:
+        description: "Worker test command"
+        type: string
+        default: "bun run test"
+      worker-directory:
+        description: "Worker project directory"
+        type: string
+        default: "worker"
 
       # Coverage artifact
       upload-coverage:
@@ -160,15 +198,18 @@ jobs:
           osv-scanner $OSV_ARGS
 
   # ─────────────────────────────────────────────────────
-  # L2: API End-to-End Tests (default on)
-  # Requires WORKER_URL and WORKER_SECRET secrets to be set.
+  # L2: API End-to-End Tests (opt-in)
+  # Runs in PARALLEL with quality-gate for faster CI.
+  #
+  # IMPORTANT: L2 tests require Cloudflare resources. The caller
+  # must define all required secrets and pass `secrets: inherit`.
+  # The test runner script handles env var setup internally.
   # ─────────────────────────────────────────────────────
   api-e2e:
     name: "L2 API E2E"
     if: inputs.enable-l2 == 'true'
-    needs: [quality-gate]
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -189,13 +230,67 @@ jobs:
         run: ${{ inputs.l2-command }}
         env:
           CI: "true"
-          # Worker connection (required)
-          WORKER_URL: ${{ secrets.WORKER_URL }}
-          WORKER_SECRET: ${{ secrets.WORKER_SECRET }}
-          E2E_SKIP_AUTH: "true"
-          # R2 direct upload (required for media tests)
-          CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
-          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
-          R2_PUBLIC_URL: ${{ secrets.R2_PUBLIC_URL }}
+
+  # ─────────────────────────────────────────────────────
+  # L3: Browser E2E Tests — Playwright (opt-in)
+  # Runs in PARALLEL with quality-gate for faster CI.
+  #
+  # IMPORTANT: The caller must define all required secrets
+  # for Playwright tests (D1, R2, KV, Auth) and pass
+  # `secrets: inherit`.
+  # ─────────────────────────────────────────────────────
+  browser-e2e:
+    name: "L3 Browser E2E"
+    if: inputs.enable-l3 == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ inputs.bun-version }}
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Install Playwright browsers
+        run: bunx playwright install --with-deps ${{ inputs.l3-browser }}
+
+      - name: Pre-command
+        if: inputs.pre-command != ''
+        run: ${{ inputs.pre-command }}
+
+      - name: "L3: Playwright E2E tests"
+        run: ${{ inputs.l3-command }}
+        env:
+          CI: "true"
+
+  # ─────────────────────────────────────────────────────
+  # Worker: Cloudflare Worker Tests (opt-in)
+  # Runs in PARALLEL with quality-gate for faster CI.
+  # ─────────────────────────────────────────────────────
+  worker-tests:
+    name: "Worker Tests"
+    if: inputs.enable-worker == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: ${{ inputs.worker-directory }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ inputs.bun-version }}
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: "Worker: Unit tests"
+        run: ${{ inputs.worker-command }}
