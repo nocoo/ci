@@ -1,0 +1,148 @@
+name: Self Test — ssh-deploy
+
+on:
+  push:
+    branches: [feat/ssh-deploy-action]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  smoke-test:
+    name: ssh-deploy smoke tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Ensure sshd is running on localhost
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo systemctl status ssh >/dev/null 2>&1 || sudo systemctl start ssh
+          sudo systemctl status ssh >/dev/null 2>&1 || (sudo service ssh start)
+          ss -tnlp | grep -q ':22' || (echo "❌ sshd not listening on :22"; exit 1)
+          echo "✅ sshd up"
+
+      - name: Generate test key pair and authorize on this runner
+        id: keygen
+        shell: bash
+        run: |
+          set -euo pipefail
+          KEYDIR="$RUNNER_TEMP/ssh-deploy-test"
+          mkdir -p "$KEYDIR"
+          ssh-keygen -t ed25519 -N "" -f "$KEYDIR/id_test" -C "ssh-deploy-self-test"
+
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          touch ~/.ssh/authorized_keys
+          chmod 600 ~/.ssh/authorized_keys
+          cat "$KEYDIR/id_test.pub" >> ~/.ssh/authorized_keys
+
+          # 把私钥多行内容塞进 GITHUB_OUTPUT（用 EOF heredoc 形式）
+          {
+            echo "private_key<<__EOF__"
+            cat "$KEYDIR/id_test"
+            echo "__EOF__"
+          } >> "$GITHUB_OUTPUT"
+
+          # 当前 runner 用户名
+          echo "user=$(whoami)" >> "$GITHUB_OUTPUT"
+
+      # ── case 1: 基础调用 ───────────────────────────────────────────────
+      - name: "Case 1 — basic invocation"
+        id: case1
+        uses: ./.github/actions/ssh-deploy
+        with:
+          host: 127.0.0.1
+          user: ${{ steps.keygen.outputs.user }}
+          key:  ${{ steps.keygen.outputs.private_key }}
+          script: |
+            set -euo pipefail
+            echo "hello from remote"
+            hostname
+
+      # ── case 2: 环境变量传递 ───────────────────────────────────────────
+      - name: "Case 2 — envs forwarding"
+        uses: ./.github/actions/ssh-deploy
+        env:
+          TEST_VAR: "value123"
+        with:
+          host: 127.0.0.1
+          user: ${{ steps.keygen.outputs.user }}
+          key:  ${{ steps.keygen.outputs.private_key }}
+          envs: "TEST_VAR"
+          script: |
+            set -euo pipefail
+            if [ "${TEST_VAR:-}" != "value123" ]; then
+              echo "❌ expected TEST_VAR=value123, got '${TEST_VAR:-<unset>}'"
+              exit 1
+            fi
+            echo "✅ TEST_VAR forwarded correctly: $TEST_VAR"
+
+      # ── case 3: 退出码传播 ─────────────────────────────────────────────
+      - name: "Case 3 — exit code propagation (expected to fail)"
+        id: case3
+        continue-on-error: true
+        uses: ./.github/actions/ssh-deploy
+        with:
+          host: 127.0.0.1
+          user: ${{ steps.keygen.outputs.user }}
+          key:  ${{ steps.keygen.outputs.private_key }}
+          script: |
+            echo "about to exit 42"
+            exit 42
+
+      - name: "Case 3 — assert previous step failed"
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.case3.outcome }}" != "failure" ]; then
+            echo "❌ exit-42 step should have failed, got outcome='${{ steps.case3.outcome }}'"
+            exit 1
+          fi
+          echo "✅ remote exit code propagated as step failure"
+
+      # ── case 4: 多行脚本 ───────────────────────────────────────────────
+      - name: "Case 4 — multi-line script with for-loop"
+        uses: ./.github/actions/ssh-deploy
+        with:
+          host: 127.0.0.1
+          user: ${{ steps.keygen.outputs.user }}
+          key:  ${{ steps.keygen.outputs.private_key }}
+          script: |
+            set -euo pipefail
+            total=0
+            for i in 1 2 3 4 5; do
+              echo "iteration $i"
+              total=$((total + i))
+            done
+            if [ "$total" != "15" ]; then
+              echo "❌ expected total=15, got $total"
+              exit 1
+            fi
+            echo "✅ multi-line script ok, total=$total"
+
+      # ── case 5: 含空格的环境变量 ───────────────────────────────────────
+      - name: "Case 5 — env var containing space"
+        uses: ./.github/actions/ssh-deploy
+        env:
+          WITH_SPACE: "hello world"
+        with:
+          host: 127.0.0.1
+          user: ${{ steps.keygen.outputs.user }}
+          key:  ${{ steps.keygen.outputs.private_key }}
+          envs: "WITH_SPACE"
+          script: |
+            set -euo pipefail
+            if [ "${WITH_SPACE:-}" != "hello world" ]; then
+              echo "❌ expected WITH_SPACE='hello world', got '${WITH_SPACE:-<unset>}'"
+              exit 1
+            fi
+            echo "✅ space-containing var preserved: '$WITH_SPACE'"
+
+      - name: Summary
+        if: always()
+        shell: bash
+        run: |
+          echo "All ssh-deploy smoke cases reached the summary step."
