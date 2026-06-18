@@ -48,7 +48,7 @@
 | `envs`        | `envs: "A B"`           | `envs: "A B"`         | 等价（空格分隔变量名）                |
 | `script`      | `script: \|`            | `script: \|`          | 等价                                  |
 | host key 校验 | 默认跳过（`-o StrictHostKeyChecking=no`） | 默认现场 `ssh-keyscan` 写 known_hosts | 行为等价；`known-hosts` 入参可显式预置 |
-| 远端环境变量  | 通过 ssh `SendEnv`/server `AcceptEnv`     | 通过 `env VAR=val bash -s` 前缀     | 不依赖 sshd 配置，更可移植             |
+| 远端环境变量  | 通过 ssh `SendEnv`/server `AcceptEnv`     | runner 端拼 `export VAR=...` 行随脚本走 `bash -s` stdin | 不依赖 sshd 配置；登录 shell 不参与 env 值解析，字节级保真 |
 | 命令注入      | input 字符串拼接到远端                    | `env:` 块隔离 + here-string 灌 stdin | 更安全，避免 GHA 表达式注入           |
 
 ## 安全细节
