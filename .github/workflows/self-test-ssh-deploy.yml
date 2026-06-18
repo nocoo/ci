@@ -49,97 +49,211 @@ jobs:
           # 当前 runner 用户名
           echo "user=$(whoami)" >> "$GITHUB_OUTPUT"
 
-      # ── case 1: 基础调用 ───────────────────────────────────────────────
-      - name: "Case 1 — basic invocation"
+      - name: Prepare marker dir
+        id: markers
+        shell: bash
+        run: |
+          set -euo pipefail
+          MARKER_DIR="$RUNNER_TEMP/ssh-deploy-markers"
+          rm -rf "$MARKER_DIR"
+          mkdir -p "$MARKER_DIR"
+          echo "dir=$MARKER_DIR" >> "$GITHUB_OUTPUT"
+
+      # ── case 1: 基础调用 + marker 文件断言（证明远端脚本真的跑了） ──
+      - name: "Case 1 — basic invocation writes marker"
         id: case1
         uses: ./.github/actions/ssh-deploy
+        env:
+          MARKER_DIR: ${{ steps.markers.outputs.dir }}
         with:
           host: 127.0.0.1
           user: ${{ steps.keygen.outputs.user }}
           key:  ${{ steps.keygen.outputs.private_key }}
+          envs: "MARKER_DIR"
           script: |
             set -euo pipefail
-            echo "hello from remote"
-            hostname
+            printf 'hello from remote\n%s\n' "$(hostname)" > "$MARKER_DIR/case1"
 
-      # ── case 2: 环境变量传递 ───────────────────────────────────────────
+      - name: "Case 1 — assert marker content"
+        shell: bash
+        env:
+          MARKER_DIR: ${{ steps.markers.outputs.dir }}
+        run: |
+          set -euo pipefail
+          if [ ! -f "$MARKER_DIR/case1" ]; then
+            echo "❌ Case 1 marker missing — remote script did not run"
+            exit 1
+          fi
+          if ! grep -q "^hello from remote$" "$MARKER_DIR/case1"; then
+            echo "❌ Case 1 marker missing 'hello from remote' line:"
+            cat "$MARKER_DIR/case1"
+            exit 1
+          fi
+          echo "✅ Case 1: remote script ran and marker matches"
+
+      # ── case 2: 环境变量传递（变量值在远端 == 在 runner 端） ──
       - name: "Case 2 — envs forwarding"
         uses: ./.github/actions/ssh-deploy
         env:
           TEST_VAR: "value123"
+          MARKER_DIR: ${{ steps.markers.outputs.dir }}
         with:
           host: 127.0.0.1
           user: ${{ steps.keygen.outputs.user }}
           key:  ${{ steps.keygen.outputs.private_key }}
-          envs: "TEST_VAR"
+          envs: "TEST_VAR MARKER_DIR"
           script: |
             set -euo pipefail
             if [ "${TEST_VAR:-}" != "value123" ]; then
               echo "❌ expected TEST_VAR=value123, got '${TEST_VAR:-<unset>}'"
               exit 1
             fi
-            echo "✅ TEST_VAR forwarded correctly: $TEST_VAR"
+            printf '%s' "$TEST_VAR" > "$MARKER_DIR/case2"
 
-      # ── case 3: 退出码传播 ─────────────────────────────────────────────
+      - name: "Case 2 — assert env value preserved byte-for-byte"
+        shell: bash
+        env:
+          MARKER_DIR: ${{ steps.markers.outputs.dir }}
+        run: |
+          set -euo pipefail
+          actual=$(cat "$MARKER_DIR/case2")
+          if [ "$actual" != "value123" ]; then
+            echo "❌ Case 2 expected 'value123', got '$actual'"
+            exit 1
+          fi
+          echo "✅ Case 2: env value preserved"
+
+      # ── case 3: 退出码传播 + 证明脚本在 exit 42 之前确实跑了 ──
       - name: "Case 3 — exit code propagation (expected to fail)"
         id: case3
         continue-on-error: true
         uses: ./.github/actions/ssh-deploy
+        env:
+          MARKER_DIR: ${{ steps.markers.outputs.dir }}
         with:
           host: 127.0.0.1
           user: ${{ steps.keygen.outputs.user }}
           key:  ${{ steps.keygen.outputs.private_key }}
+          envs: "MARKER_DIR"
           script: |
-            echo "about to exit 42"
+            printf 'about to exit 42\n' > "$MARKER_DIR/case3-pre"
             exit 42
 
-      - name: "Case 3 — assert previous step failed"
+      - name: "Case 3 — assert step failed and pre-marker exists"
         shell: bash
+        env:
+          MARKER_DIR: ${{ steps.markers.outputs.dir }}
         run: |
           set -euo pipefail
           if [ "${{ steps.case3.outcome }}" != "failure" ]; then
             echo "❌ exit-42 step should have failed, got outcome='${{ steps.case3.outcome }}'"
             exit 1
           fi
-          echo "✅ remote exit code propagated as step failure"
+          if [ ! -f "$MARKER_DIR/case3-pre" ]; then
+            echo "❌ pre-exit marker missing — script body never ran, exit 42 was unreachable"
+            exit 1
+          fi
+          if ! grep -q "^about to exit 42$" "$MARKER_DIR/case3-pre"; then
+            echo "❌ pre-exit marker has unexpected content:"
+            cat "$MARKER_DIR/case3-pre"
+            exit 1
+          fi
+          echo "✅ Case 3: body ran, then exit 42 propagated as step failure"
 
-      # ── case 4: 多行脚本 ───────────────────────────────────────────────
+      # ── case 4: 多行脚本 ──
       - name: "Case 4 — multi-line script with for-loop"
         uses: ./.github/actions/ssh-deploy
+        env:
+          MARKER_DIR: ${{ steps.markers.outputs.dir }}
         with:
           host: 127.0.0.1
           user: ${{ steps.keygen.outputs.user }}
           key:  ${{ steps.keygen.outputs.private_key }}
+          envs: "MARKER_DIR"
           script: |
             set -euo pipefail
             total=0
             for i in 1 2 3 4 5; do
-              echo "iteration $i"
               total=$((total + i))
             done
-            if [ "$total" != "15" ]; then
-              echo "❌ expected total=15, got $total"
-              exit 1
-            fi
-            echo "✅ multi-line script ok, total=$total"
+            printf '%s' "$total" > "$MARKER_DIR/case4"
 
-      # ── case 5: 含空格的环境变量 ───────────────────────────────────────
+      - name: "Case 4 — assert sum"
+        shell: bash
+        env:
+          MARKER_DIR: ${{ steps.markers.outputs.dir }}
+        run: |
+          set -euo pipefail
+          actual=$(cat "$MARKER_DIR/case4")
+          if [ "$actual" != "15" ]; then
+            echo "❌ Case 4 expected 15, got '$actual'"
+            exit 1
+          fi
+          echo "✅ Case 4: multi-line script computed 15"
+
+      # ── case 5: 含空格的环境变量 ──
       - name: "Case 5 — env var containing space"
         uses: ./.github/actions/ssh-deploy
         env:
           WITH_SPACE: "hello world"
+          MARKER_DIR: ${{ steps.markers.outputs.dir }}
         with:
           host: 127.0.0.1
           user: ${{ steps.keygen.outputs.user }}
           key:  ${{ steps.keygen.outputs.private_key }}
-          envs: "WITH_SPACE"
+          envs: "WITH_SPACE MARKER_DIR"
           script: |
             set -euo pipefail
-            if [ "${WITH_SPACE:-}" != "hello world" ]; then
-              echo "❌ expected WITH_SPACE='hello world', got '${WITH_SPACE:-<unset>}'"
-              exit 1
-            fi
-            echo "✅ space-containing var preserved: '$WITH_SPACE'"
+            printf '%s' "$WITH_SPACE" > "$MARKER_DIR/case5"
+
+      - name: "Case 5 — assert space-containing value preserved"
+        shell: bash
+        env:
+          MARKER_DIR: ${{ steps.markers.outputs.dir }}
+        run: |
+          set -euo pipefail
+          actual=$(cat "$MARKER_DIR/case5")
+          if [ "$actual" != "hello world" ]; then
+            echo "❌ Case 5 expected 'hello world', got '$actual'"
+            exit 1
+          fi
+          echo "✅ Case 5: space preserved"
+
+      # ── case 6: 含 newline + tab 的环境变量（验证 export-via-stdin 设计） ──
+      - name: "Case 6 — env var containing newline and tab"
+        uses: ./.github/actions/ssh-deploy
+        env:
+          # 真·多行 + tab：这是 reviewer 提出的 dash login-shell 失真场景
+          TRICKY: "line1\nline2\ttabbed"
+          MARKER_DIR: ${{ steps.markers.outputs.dir }}
+        with:
+          host: 127.0.0.1
+          user: ${{ steps.keygen.outputs.user }}
+          key:  ${{ steps.keygen.outputs.private_key }}
+          envs: "TRICKY MARKER_DIR"
+          script: |
+            set -euo pipefail
+            # printf %s 不解释转义，写出真实字节
+            printf '%s' "$TRICKY" > "$MARKER_DIR/case6"
+
+      - name: "Case 6 — assert newline + tab preserved byte-for-byte"
+        shell: bash
+        env:
+          MARKER_DIR: ${{ steps.markers.outputs.dir }}
+        run: |
+          set -euo pipefail
+          # YAML 双引号字面量 "line1\nline2\ttabbed" 会被 GHA 解释成真实
+          # LF + TAB 字节（共 19 字节），这正是 reviewer 提出的 dash 登录 shell
+          # 会失真的场景。用 ANSI-C $'...' 构造相同字节作期望值。
+          expected=$'line1\nline2\ttabbed'
+          actual=$(cat "$MARKER_DIR/case6")
+          if [ "$actual" != "$expected" ]; then
+            echo "❌ Case 6 mismatch"
+            echo "  expected hexdump:"; printf '%s' "$expected" | xxd
+            echo "  actual   hexdump:"; printf '%s' "$actual"   | xxd
+            exit 1
+          fi
+          echo "✅ Case 6: real newline + tab bytes preserved through ssh stdin pipeline"
 
       - name: Summary
         if: always()
