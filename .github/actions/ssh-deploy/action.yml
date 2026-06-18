@@ -1,0 +1,107 @@
+name: SSH Deploy
+description: 通过 SSH 在远程服务器执行部署脚本（替代 appleboy/ssh-action，零第三方依赖）
+
+inputs:
+  host:
+    description: SSH 目标主机
+    required: true
+  user:
+    description: SSH 用户
+    required: true
+  port:
+    description: SSH 端口
+    required: false
+    default: "22"
+  key:
+    description: SSH 私钥（PEM 格式，整段，包含 BEGIN/END 行）
+    required: true
+  envs:
+    description: |
+      要从 runner 环境带到远端的环境变量名，空格分隔。
+      例如 envs: "IMAGE_SHA BUILD_ID"。
+      对应变量必须在调用方 step 的 `env:` 块里设置好。
+    required: false
+    default: ""
+  script:
+    description: 在远端执行的 bash 脚本（多行）
+    required: true
+  known-hosts:
+    description: |
+      预置 host key 列表（多行，每行一条 ssh-keyscan 输出）。
+      留空则现场用 ssh-keyscan 抓 host key（等价 appleboy/ssh-action 默认 StrictHostKeyChecking=no 行为）。
+      生产场景建议预先 ssh-keyscan 后存入 GitHub secret 传入。
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Setup SSH
+      shell: bash
+      env:
+        DEPLOY_KEY: ${{ inputs.key }}
+        DEPLOY_HOST: ${{ inputs.host }}
+        DEPLOY_PORT: ${{ inputs.port }}
+        KNOWN_HOSTS: ${{ inputs.known-hosts }}
+      run: |
+        set -euo pipefail
+        mkdir -p ~/.ssh
+        chmod 700 ~/.ssh
+
+        # 写入私钥（不打印，仅落盘）
+        printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/deploy_key
+        chmod 600 ~/.ssh/deploy_key
+
+        # 处理 known_hosts
+        if [ -n "$KNOWN_HOSTS" ]; then
+          printf '%s\n' "$KNOWN_HOSTS" >> ~/.ssh/known_hosts
+        else
+          # 没有预置 known_hosts，现场抓取（等价 StrictHostKeyChecking=no 的可控版本）
+          ssh-keyscan -p "$DEPLOY_PORT" -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+        fi
+        chmod 600 ~/.ssh/known_hosts
+
+    - name: Execute remote script
+      shell: bash
+      env:
+        DEPLOY_HOST: ${{ inputs.host }}
+        DEPLOY_USER: ${{ inputs.user }}
+        DEPLOY_PORT: ${{ inputs.port }}
+        DEPLOY_ENVS: ${{ inputs.envs }}
+        DEPLOY_SCRIPT: ${{ inputs.script }}
+      run: |
+        set -euo pipefail
+
+        # 把 envs: 列出的变量序列化成 `export KEY=bash_quoted_value` 行，
+        # 然后把它们和用户脚本拼在一起整体送进远端 `bash -s` 的 stdin。
+        # 远端用户的登录 shell（可能是 dash/sh/zsh）只看到固定的 `bash -s` 命令，
+        # 不会去解析 env 值，因此 `printf '%q'` 的 bash quote 一定由 bash 自己解析，
+        # 不会被中间的非 bash 登录 shell 静默改写（newline/tab 等也安全）。
+        EXPORTS=""
+        if [ -n "$DEPLOY_ENVS" ]; then
+          for var_name in $DEPLOY_ENVS; do
+            if [ -z "${!var_name+x}" ]; then
+              echo "::warning::env var '$var_name' listed in envs: but unset in runner environment; skipping"
+              continue
+            fi
+            quoted=$(printf '%q' "${!var_name}")
+            EXPORTS+="export ${var_name}=${quoted}"$'\n'
+          done
+        fi
+
+        REMOTE_PAYLOAD="${EXPORTS}${DEPLOY_SCRIPT}"
+
+        ssh \
+          -i ~/.ssh/deploy_key \
+          -p "$DEPLOY_PORT" \
+          -o BatchMode=yes \
+          -o ServerAliveInterval=30 \
+          -o ServerAliveCountMax=10 \
+          "${DEPLOY_USER}@${DEPLOY_HOST}" \
+          'bash -s' <<< "$REMOTE_PAYLOAD"
+
+    - name: Cleanup SSH key
+      if: always()
+      shell: bash
+      run: |
+        rm -f ~/.ssh/deploy_key
