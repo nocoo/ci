@@ -55,10 +55,11 @@
 
 - 所有敏感 input（`key` / `script` / `envs`）通过 step 的 `env:` 块传递，**绝不**在
   `run:` 里直接 `${{ inputs.x }}` 字符串插值——避免 GHA expression injection。
-- 远端 script 用 here-string `<<<` 灌进 ssh 的 stdin，不作为 ssh 命令行参数，避免 shell
-  二次解析。
-- `envs` 列出的变量值用 `printf '%q'` 安全 quote 后拼到远端命令前缀，可正确处理空格、
-  引号、特殊字符。
+- 远端调用串就是固定字面 `bash -s`，**没有任何用户输入参与远端命令拼接**。`envs`
+  列出的变量在 runner 端用 `printf '%q'` 做 bash quote 后，以 `export VAR=...`
+  形式拼到用户脚本前面，整体作为 here-string 灌给远端 `bash -s` 的 stdin——
+  远端用户登录 shell（可能是 dash/sh/zsh）完全不参与 env 值解析，因此可正确
+  保留 newline / tab / 引号 等任意字节。
 - `BatchMode=yes` 防止远端 prompt 卡死 runner；`ServerAliveInterval=30` 防长部署被
   中间设备断 idle 连接。
 - 私钥文件 `~/.ssh/deploy_key` 在 cleanup step 用 `if: always()` 删除，不会泄露到后续
@@ -66,13 +67,12 @@
 
 ## 已知 pitfall
 
-- **secret 值含单引号**：`printf '%q'` 在 bash 里能正确转义（输出 `\'`），但远端必须是
-  bash（不是 dash/sh）。GitHub Actions runner 的 ssh 默认调用对端用户 shell，所以远端
-  shell 是 bash 时安全。生产 VPS 上的 root/deploy 用户基本都是 bash，实际验证下来
-  `VPS_*` / `GHCR_*` 这类 secret 不会触碰这条边界。
-- **here-string 缓冲区上限**：`<<< "$DEPLOY_SCRIPT"` 把整个脚本灌 stdin，超长（> 64KB
-  量级）可能撞 ssh/管道缓冲区。实测 4KB 内安全，下游目前最长的 ellie release.yml ssh
-  脚本约 1.5KB，远在安全区。
+- **远端必须能调用 `bash`**：action 把 `bash -s` 作为 ssh 命令字符串发出。如果远端
+  用户的登录 shell 是 dash/sh/zsh，bash 必须在 `$PATH` 里能找到——主流 Linux 发行版
+  都默认装 bash，VPS 上基本不会出问题。
+- **here-string 缓冲区上限**：`<<< "$REMOTE_PAYLOAD"` 把 exports 前缀 + 用户脚本整体灌
+  stdin，超长（> 64KB 量级）可能撞 ssh/管道缓冲区。实测 4KB 内安全，下游目前最长的
+  ellie release.yml ssh 脚本约 1.5KB，远在安全区。
 - **`envs` 变量必须先在 step 的 `env:` 块设置**：`with: envs: FOO` 只是声明要传递
   `FOO`，`FOO` 本身得在调用方 step 的 `env:` 中赋值，否则 action 会跳过并打 warning。
 - **不预置 `known-hosts` 时**：默认行为是现场 `ssh-keyscan` 写 known_hosts，等价

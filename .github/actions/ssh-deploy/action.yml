@@ -72,8 +72,12 @@ runs:
       run: |
         set -euo pipefail
 
-        # 把 envs: 列出的变量名从 runner 环境序列化成 `KEY=quoted_value` 串
-        ENV_PREFIX=""
+        # 把 envs: 列出的变量序列化成 `export KEY=bash_quoted_value` 行，
+        # 然后把它们和用户脚本拼在一起整体送进远端 `bash -s` 的 stdin。
+        # 远端用户的登录 shell（可能是 dash/sh/zsh）只看到固定的 `bash -s` 命令，
+        # 不会去解析 env 值，因此 `printf '%q'` 的 bash quote 一定由 bash 自己解析，
+        # 不会被中间的非 bash 登录 shell 静默改写（newline/tab 等也安全）。
+        EXPORTS=""
         if [ -n "$DEPLOY_ENVS" ]; then
           for var_name in $DEPLOY_ENVS; do
             if [ -z "${!var_name+x}" ]; then
@@ -81,11 +85,12 @@ runs:
               continue
             fi
             quoted=$(printf '%q' "${!var_name}")
-            ENV_PREFIX="${ENV_PREFIX} ${var_name}=${quoted}"
+            EXPORTS+="export ${var_name}=${quoted}"$'\n'
           done
         fi
 
-        # 通过 stdin here-string 灌脚本，避免参数注入；env 前缀确保变量在远端 bash session 可见
+        REMOTE_PAYLOAD="${EXPORTS}${DEPLOY_SCRIPT}"
+
         ssh \
           -i ~/.ssh/deploy_key \
           -p "$DEPLOY_PORT" \
@@ -93,7 +98,7 @@ runs:
           -o ServerAliveInterval=30 \
           -o ServerAliveCountMax=10 \
           "${DEPLOY_USER}@${DEPLOY_HOST}" \
-          "env ${ENV_PREFIX} bash -s" <<< "$DEPLOY_SCRIPT"
+          'bash -s' <<< "$REMOTE_PAYLOAD"
 
     - name: Cleanup SSH key
       if: always()
