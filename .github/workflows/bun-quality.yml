@@ -345,10 +345,23 @@ jobs:
       - name: Install extra dirs
         if: inputs.extra-install-dirs != ''
         shell: bash
+        # Override the job-level working-directory (worker/) so we resolve
+        # extra dirs against the repo root, and skip the entry that equals
+        # worker-directory itself — the previous "Install dependencies"
+        # step already covered it. Without this, callers that list their
+        # worker as an extra install dir (e.g. so L2/L3 also get worker
+        # deps) would trip `cd worker` from inside worker/ → cd worker/worker.
+        working-directory: ${{ github.workspace }}
         run: |
           IFS=',' read -ra DIRS <<< "${{ inputs.extra-install-dirs }}"
+          worker_dir="$(echo "${{ inputs.worker-directory }}" | xargs)"
           for d in "${DIRS[@]}"; do
             d_trim="$(echo "$d" | xargs)"
+            if [ "$d_trim" = "$worker_dir" ]; then
+              echo "::group::skip $d_trim (already installed as worker-directory)"
+              echo "::endgroup::"
+              continue
+            fi
             echo "::group::bun install in $d_trim"
             (cd "$d_trim" && bun install --frozen-lockfile ${{ (inputs.ignore-scripts && inputs.trusted-native-deps == '') && '--ignore-scripts' || '' }})
             echo "::endgroup::"
