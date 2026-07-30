@@ -128,16 +128,63 @@ on:
         type: string
         default: "coverage"
 
+      # Internal — do not set from callers. See the workflow_dispatch block
+      # below and the `refresh-latest` job comment for why this exists.
+      _self_dispatch:
+        description: "Reserved. Leave unset. Manual latest-run refresh via workflow_dispatch sets this to skip every real job."
+        type: boolean
+        default: false
+
+  # Self-dispatch: lets a maintainer produce a fresh green "latest run" from
+  # the GitHub UI when this reusable workflow's latest history is a stale
+  # failure that no caller will ever overwrite. Real work only runs via
+  # workflow_call — the sentinel input below gates the actual jobs off.
+  workflow_dispatch:
+    inputs:
+      _self_dispatch:
+        description: "Do not change. Sentinel that identifies a manual latest-run refresh so the reusable jobs (which need a caller repo) are skipped."
+        type: boolean
+        default: true
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   # ─────────────────────────────────────────────────────
+  # Self-dispatch sentinel — the ONLY job that runs on workflow_dispatch.
+  #
+  # Why this exists: this file is a `workflow_call` reusable. Its "latest
+  # run" is whichever run of the *reusable itself* GitHub last recorded —
+  # and workflow_call invocations from OTHER repos never appear here.
+  # If the last direct run failed (e.g. a broken push while the file was
+  # still triggered on push), that failure sits at latest forever and any
+  # workflow-scoped health checker flags this repo indefinitely (see
+  # STU-2244, STU-1830, STU-1023 for the recurrence).
+  #
+  # `workflow_dispatch` above is the escape hatch: a maintainer can trigger
+  # this workflow from the Actions UI to produce a fresh green run and
+  # overwrite the stale latest. Every real reusable job below is gated
+  # off with `if: ${{ !inputs._self_dispatch }}` so the manual refresh
+  # never tries to execute jobs that need a caller repo (they'd fail).
+  refresh-latest:
+    name: "Self-dispatch: refresh latest run"
+    if: ${{ inputs._self_dispatch }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - name: Explain
+        run: |
+          echo "This run was triggered via workflow_dispatch on the reusable"
+          echo "workflow itself to refresh its stale 'latest' record."
+          echo "No caller repository is involved; no quality checks are executed."
+
+  # ─────────────────────────────────────────────────────
   # L1 + G1 + G2 — always runs
   # ─────────────────────────────────────────────────────
   quality-gate:
     name: "L1+G1+G2"
+    if: ${{ !inputs._self_dispatch }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -233,7 +280,7 @@ jobs:
   # ─────────────────────────────────────────────────────
   api-e2e:
     name: "L2 API E2E"
-    if: inputs.enable-l2 == 'true'
+    if: ${{ !inputs._self_dispatch && inputs.enable-l2 == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -279,7 +326,7 @@ jobs:
   # ─────────────────────────────────────────────────────
   browser-e2e:
     name: "L3 Browser E2E"
-    if: inputs.enable-l3 == 'true'
+    if: ${{ !inputs._self_dispatch && inputs.enable-l3 == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -324,7 +371,7 @@ jobs:
   # ─────────────────────────────────────────────────────
   worker-tests:
     name: "Worker Tests"
-    if: inputs.enable-worker == 'true'
+    if: ${{ !inputs._self_dispatch && inputs.enable-worker == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     defaults:

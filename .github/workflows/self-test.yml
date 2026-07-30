@@ -35,6 +35,7 @@ jobs:
           assert True in wf or 'on' in wf, 'Missing on: trigger'
           on_key = wf.get(True) or wf.get('on')
           assert 'workflow_call' in on_key, 'Missing workflow_call trigger'
+          assert 'workflow_dispatch' in on_key, 'Missing workflow_dispatch trigger (needed to refresh stale latest run — see refresh-latest job)'
           assert 'jobs' in wf, 'Missing jobs'
           inputs = on_key['workflow_call'].get('inputs', {})
           for required in ('ignore-scripts', 'extra-install-dirs'):
@@ -43,6 +44,33 @@ jobs:
           assert inputs['ignore-scripts']['default'] is False
           assert inputs['extra-install-dirs']['type'] == 'string'
           assert inputs['extra-install-dirs']['default'] == ''
+          # Self-dispatch sentinel — must exist on BOTH triggers with matching semantics.
+          # workflow_call default MUST be False so real callers never accidentally skip
+          # the reusable jobs; workflow_dispatch default MUST be True so a manual
+          # UI-triggered latest-refresh run activates the sentinel path automatically.
+          for trigger_name in ('workflow_call', 'workflow_dispatch'):
+              trig_inputs = on_key[trigger_name].get('inputs', {})
+              assert '_self_dispatch' in trig_inputs, f'Missing _self_dispatch on {trigger_name}'
+              assert trig_inputs['_self_dispatch']['type'] == 'boolean', f'_self_dispatch on {trigger_name} must be boolean'
+          assert on_key['workflow_call']['inputs']['_self_dispatch']['default'] is False, \
+              'workflow_call._self_dispatch default must be False (else real callers skip every job)'
+          assert on_key['workflow_dispatch']['inputs']['_self_dispatch']['default'] is True, \
+              'workflow_dispatch._self_dispatch default must be True (else manual refresh runs the reusable jobs and fails)'
+          jobs = wf['jobs']
+          assert 'refresh-latest' in jobs, 'Missing refresh-latest job (used to overwrite stale failure at latest)'
+          # refresh-latest's if: MUST reference _self_dispatch AND MUST NOT negate
+          # it. We compare against the substring of the if: expression rather than
+          # a full literal, because writing the GHA expression syntax inside this
+          # heredoc would confuse both actionlint and the shell heredoc quoting.
+          refresh_if = jobs['refresh-latest'].get('if', '')
+          assert '_self_dispatch' in refresh_if, 'refresh-latest must gate on _self_dispatch'
+          assert '!inputs._self_dispatch' not in refresh_if.replace(' ', ''), 'refresh-latest must run WHEN self-dispatch is true, not when false'
+          # Every non-sentinel job must be gated OFF when _self_dispatch is true.
+          for name, job in jobs.items():
+              if name == 'refresh-latest':
+                  continue
+              cond = job.get('if', '').replace(' ', '')
+              assert '!inputs._self_dispatch' in cond, f'job {name!r} is missing self-dispatch skip gate — a manual refresh will try to run it and fail'
           print('✅ Workflow structure valid')
           print(f'  Triggers: {list(on_key.keys())}')
           print(f'  Jobs: {list(wf[\"jobs\"].keys())}')
