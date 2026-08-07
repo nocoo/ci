@@ -257,7 +257,7 @@ jobs:
         if: inputs.enable-security == 'true'
         run: |
           OSV_VERSION="2.3.5"
-          curl -sSfL -o /usr/local/bin/osv-scanner \
+          curl --retry 5 --retry-delay 2 --retry-all-errors -sSfL -o /usr/local/bin/osv-scanner \
             "https://github.com/google/osv-scanner/releases/download/v${OSV_VERSION}/osv-scanner_linux_amd64"
           chmod +x /usr/local/bin/osv-scanner
 
