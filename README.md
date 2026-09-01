@@ -309,19 +309,19 @@ This ensures tests **never** run against production resources.
 
 ## Versioning
 
-Use semantic version tags:
+Pin callers at `v2026.N` (current latest `v2026.6`):
 
 ```bash
-git tag -a v2026 -m "2026 release"
-git push origin v2026
+git tag -a v2026.7 -m "2026.7"
+git push origin v2026.7
 ```
 
-To update an existing tag:
+Move the floating `v2026` tag only when intended:
 
 ```bash
 git tag -d v2026
 git push origin :refs/tags/v2026
-git tag -a v2026 -m "2026 release (updated)"
+git tag -a v2026 -m "points at v2026.7"
 git push origin v2026
 ```
 
