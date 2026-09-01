@@ -29,7 +29,7 @@ on:
 
 jobs:
   quality:
-    uses: nocoo/base-ci/.github/workflows/bun-quality.yml@v2026
+    uses: nocoo/base-ci/.github/workflows/bun-quality.yml@v2026.6
     with:
       bun-version: "1.3.11"
     secrets: inherit
@@ -40,7 +40,7 @@ jobs:
 ```yaml
 jobs:
   quality:
-    uses: nocoo/base-ci/.github/workflows/bun-quality.yml@v2026
+    uses: nocoo/base-ci/.github/workflows/bun-quality.yml@v2026.6
     with:
       bun-version: "1.3.11"
       pre-command: "bun run build --no-lint"
@@ -64,7 +64,7 @@ on:
 jobs:
   # L1 + G1 + G2 from base-ci
   quality:
-    uses: nocoo/base-ci/.github/workflows/bun-quality.yml@v2026
+    uses: nocoo/base-ci/.github/workflows/bun-quality.yml@v2026.6
     with:
       bun-version: "1.3.11"
       pre-command: "bun run build --no-lint"
