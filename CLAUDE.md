@@ -61,7 +61,7 @@ docs-config: omit product L1/L2/L3/G2/build/release rows. This repo’s bar is s
 | SSH deploy action | smoke workflow | enforced | `self-test-ssh-deploy.yml` on PR to `main` (push trigger is still `feat/ssh-deploy-action` only) |
 | Types / lint / coverage | n/a product suite | N/A | — |
 | Docs | README matches new inputs | manual | human review |
-| Release | annotated tag `v2026.N` and moving `v2026` | manual | operator `git tag` |
+| Release | annotated tag `v2026.N`; move `v2026` only when intended | manual | operator `git tag` |
 
 No local husky. `--no-verify` still forbidden if hooks appear later.
 
