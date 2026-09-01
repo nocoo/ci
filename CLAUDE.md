@@ -20,7 +20,7 @@ This file is the **contract**. Workflows and self-test CI are **enforcement**. I
 
 ## Project Invariants
 
-- Consumers call `nocoo/base-ci/.github/workflows/bun-quality.yml@v2026` (or a pinned `v2026.N`). Do not copy-paste job YAML into callers.
+- Consumers should pin `nocoo/base-ci/.github/workflows/bun-quality.yml@v2026.N`. Moving tag `v2026` currently points at `v2026.1`, not latest `v2026.6` — do not treat `@v2026` as current.
 - This repo must not store caller secrets. `secrets: inherit` stays on the caller.
 - `ignore-scripts` / `trusted-native-deps` are supply-chain contract: keep them consistent with the caller’s `package.json#trustedDependencies`.
 - Changing `bun-quality.yml` inputs or job names is a breaking change; bump a `v2026.N` tag and keep `v2026` moving only when intended.
@@ -46,11 +46,7 @@ This file is the **contract**. Workflows and self-test CI are **enforcement**. I
 
 ## Commands
 
-No root package scripts. Validate by pushing to `main` (self-test) or opening a PR.
-
-```bash
-python3 -c "import yaml; yaml.safe_load(open('.github/workflows/bun-quality.yml'))"
-```
+No root package scripts. This machine has no PyYAML. Validation is GitHub `self-test.yml` on push/PR to `main`.
 
 ## Verification
 
@@ -60,9 +56,9 @@ docs-config: omit product L1/L2/L3/G2/build/release rows. This repo’s bar is s
 
 | Change | Proof | Status | Evidence |
 |---|---|---|---|
-| Workflow syntax + inputs | YAML load + structure asserts | enforced | `.github/workflows/self-test.yml` `validate` job |
-| Reusable workflow behavior | fixture app through `bun-quality.yml` | enforced | `self-test.yml` remaining jobs |
-| SSH deploy action | self-test workflow | enforced | `.github/workflows/self-test-ssh-deploy.yml` |
+| Workflow syntax | YAML load + a few input asserts | enforced | `self-test.yml` `validate` (not every public input/job id) |
+| Reusable workflow behavior | caller `uses: bun-quality.yml` | planned | — (self-test mirrors install recipes, does not call the reusable workflow) |
+| SSH deploy action | smoke workflow | enforced | `self-test-ssh-deploy.yml` on PR to `main` (push trigger is still `feat/ssh-deploy-action` only) |
 | Types / lint / coverage | n/a product suite | N/A | — |
 | Docs | README matches new inputs | manual | human review |
 | Release | annotated tag `v2026.N` and moving `v2026` | manual | operator `git tag` |
