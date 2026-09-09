@@ -40,6 +40,7 @@ This file is the **contract**. Workflows and self-test CI are **enforcement**. I
 ```
 .github/workflows/bun-quality.yml     reusable 6DQ workflow
 .github/workflows/self-test.yml       syntax + fixture run
+.github/workflows/self-test-ssh-deploy.yml  ssh-deploy smoke
 .github/actions/ssh-deploy/           composite SSH deploy
 .github/fixtures/self-test/           dummy Bun app for the reusable workflow
 ```
